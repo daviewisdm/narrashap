@@ -1,0 +1,173 @@
+# Narrashap
+
+> Transform machine learning explanations into clear, trustworthy, human-readable reports.
+
+Narrashap is an open-source Python library that converts raw Explainable AI (XAI) outputs into detailed narratives for researchers, engineers, clinicians, business users, and decision-makers.
+
+Rather than displaying only SHAP values and feature contribution plots, ExplainKit explains **how** a model reached its prediction in natural language while remaining faithful to the underlying explanation algorithm.
+
+---
+
+## Motivation
+
+Current XAI libraries excel at generating feature attribution scores but often leave interpretation to the user.
+
+For example, SHAP might output:
+
+| Feature | SHAP Value |
+|----------|-----------:|
+| Age | +0.27 |
+| Smoking | +0.18 |
+| BMI | +0.11 |
+| Exercise | -0.08 |
+
+ExplainKit turns this into:
+
+> The model's baseline prediction was **18.4%**.
+>
+> After evaluating the patient's characteristics, the predicted risk increased to **61.2%**.
+>
+> Smoking history was the strongest contributor to the prediction, followed by age and BMI. Regular exercise reduced the predicted risk, partially offsetting these factors.
+>
+> These explanations describe how the model reached its prediction and should not be interpreted as evidence of causal relationships.
+
+---
+
+## Features
+
+- Natural language explanations
+- Baseline prediction interpretation
+- Feature contribution summaries
+- Positive and negative driver ranking
+- AI-assisted explanation generation
+- Audience-aware reports
+- Interactive HTML reports
+- Markdown and PDF export
+- Jupyter Notebook support
+- Streamlit integration
+- Explanation validation
+- Counterfactual-ready architecture
+- Fairness and sensitive-feature alerts *(planned)*
+
+---
+
+## Example
+
+```python
+import shap
+from explainkit import Explainer
+
+explainer = Explainer(model, X_train)
+
+report = explainer.explain(
+    observation=X_test.iloc[0]
+)
+
+print(report.summary())
+```
+
+Output
+
+```
+Prediction: 0.74
+
+Baseline prediction:
+0.21
+
+Main contributors:
+
+↑ Smoking (+0.18)
+↑ BMI (+0.12)
+↑ Age (+0.09)
+
+Risk-reducing factors:
+
+↓ Exercise (-0.05)
+
+Summary:
+
+The model predicts a higher-than-average risk for this patient. Smoking history was the strongest contributor, followed by BMI and age. Regular exercise partially reduced the prediction. These explanations reflect the model's reasoning and should not be interpreted as causal evidence.
+```
+
+---
+
+## Vision
+
+Narrashap aims to bridge the gap between machine learning models and the people who rely on them.
+
+We believe explanations should be:
+
+- Accurate
+- Faithful
+- Understandable
+- Transparent
+- Actionable
+- Responsible
+
+---
+
+## Planned Roadmap
+
+### Version 0.1
+- SHAP integration
+- Narrative explanations
+- Feature ranking
+- Markdown reports
+
+### Version 0.2
+- HTML report generation
+- Streamlit component
+- PDF export
+- Explanation templates
+
+### Version 0.3
+- Support for LIME
+- Counterfactual explanations
+- Explanation quality metrics
+- Confidence summaries
+
+### Version 0.4
+- Domain-specific explainers
+    - Healthcare
+    - Finance
+    - Insurance
+    - Manufacturing
+
+### Version 1.0
+- Multi-framework support
+- LLM-assisted explanations
+- Interactive dashboards
+- Production-ready API
+
+---
+
+## Design Principles
+
+Narrashap follows four core principles:
+
+1. **Faithfulness** — Every explanation must accurately reflect the model's behavior.
+2. **Transparency** — Users should understand how predictions are formed.
+3. **Accessibility** — Explanations should be understandable by non-technical audiences.
+4. **Extensibility** — Support multiple XAI frameworks through a consistent interface.
+
+---
+
+## Contributing
+
+Contributions are welcome!
+
+Whether you're improving documentation, fixing bugs, designing visualizations, or implementing new explanation strategies, we'd love your help.
+
+---
+
+## Disclaimer
+
+Narrashap explains **how a machine learning model arrived at its prediction**.
+
+It does **not** establish causal relationships or provide medical, legal, or financial advice. Users remain responsible for interpreting model outputs within the appropriate domain context.
+
+---
+
+## License
+
+MIT License
