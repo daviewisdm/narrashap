@@ -1,0 +1,11 @@
+shap
+pandas
+numpy
+
+[anthropic]
+anthropic
+
+[dev]
+pytest
+anthropic
+scikit-learn

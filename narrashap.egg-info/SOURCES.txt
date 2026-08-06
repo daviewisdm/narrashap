@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+narrashap/__init__.py
+narrashap.egg-info/PKG-INFO
+narrashap.egg-info/SOURCES.txt
+narrashap.egg-info/dependency_links.txt
+narrashap.egg-info/requires.txt
+narrashap.egg-info/top_level.txt
+narrashap/core/__init__.py
+narrashap/core/extractor.py
+tests/test_extractor.py
