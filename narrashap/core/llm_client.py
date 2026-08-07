@@ -50,11 +50,15 @@ class AnthropicClient:
                 messages=[{"role": "user", "content": prompt}],
             )
         except anthropic.AuthenticationError as exc:
-            raise anthropic.AuthenticationError(
+            # anthropic's exception classes require response=/body= kwargs in
+            # their constructor, so they can't be re-raised with just a
+            # string message. Wrap in a plain exception instead, preserving
+            # the original error via `from exc`.
+            raise RuntimeError(
                 "Anthropic authentication failed. Verify your API key."
             ) from exc
         except anthropic.APIError as exc:
-            raise anthropic.APIError(
+            raise RuntimeError(
                 f"Anthropic API request failed: {exc}"
             ) from exc
 
