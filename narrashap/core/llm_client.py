@@ -69,6 +69,49 @@ class AnthropicClient:
         return "".join(parts)
 
 
+class GroqClient:
+    """Groq API client (OpenAI-compatible) with lazy SDK import.
+
+    Free tier as of writing: 30 requests/min, 14,400/day on models like
+    openai/gpt-oss-120b. No credit card required to start.
+    """
+
+    def __init__(
+        self,
+        model: str = "openai/gpt-oss-120b",
+        api_key: Optional[str] = None,
+    ) -> None:
+        self.model = model
+        self.api_key = api_key or os.environ.get("GROQ_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "Groq API key required: pass api_key or set GROQ_API_KEY"
+            )
+
+    def generate(self, prompt: str, max_tokens: int = 800) -> str:
+        """Call the Groq chat completions API and return the response text."""
+        try:
+            from groq import Groq
+        except ImportError as exc:
+            raise ImportError(
+                "groq package is required for GroqClient. "
+                "Install with: pip install groq"
+            ) from exc
+
+        try:
+            client = Groq(api_key=self.api_key)
+            response = client.chat.completions.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                reasoning_effort="low",  # keep more of the token budget for the actual narrative
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Groq API request failed: {exc}") from exc
+
+        return response.choices[0].message.content or ""
+
+
 class TemplateOnlyClient:
     """Template-based narrative generator that does not call an LLM."""
 

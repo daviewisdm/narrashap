@@ -8,4 +8,15 @@ narrashap.egg-info/requires.txt
 narrashap.egg-info/top_level.txt
 narrashap/core/__init__.py
 narrashap/core/extractor.py
+narrashap/core/llm_client.py
+narrashap/core/narrator.py
+narrashap/core/scorer.py
+narrashap/domains/__init__.py
+narrashap/domains/fraud.py
+narrashap/domains/healthcare.py
+narrashap/templates/__init__.py
+narrashap/templates/audience.py
+narrashap/templates/causal_language.py
 tests/test_extractor.py
+tests/test_narrator.py
+tests/test_scorer.py
