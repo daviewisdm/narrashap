@@ -126,8 +126,10 @@ class TemplateOnlyClient:
         self,
         context: ExplanationContext,
         audience: str,
+        risk_percentage: Optional[float] = None,
+        risk_level: Optional[str] = None,
     ) -> str:
-        """Build a narrative purely from string templates (no LLM call).
+        """Build a detailed, plain-language narrative purely from templates.
 
         Parameters
         ----------
@@ -135,56 +137,76 @@ class TemplateOnlyClient:
             Structured SHAP explanation context.
         audience:
             Target audience label (used for light phrasing adjustments).
+        risk_percentage:
+            Optional value like 65.6 (meaning 65.6%). If provided, this is
+            shown instead of the raw base_value/predicted_value, which are
+            in log-odds space and not meaningful to a non-technical reader.
+        risk_level:
+            Optional label like "MODERATE RISK" to include in the summary.
 
         Returns
         -------
         str
-            Template-generated narrative text.
+            A longer, plain-language narrative covering the top
+            contributing factors, written for a non-technical reader.
         """
-        top = context.contributions[:3]
+        top = context.contributions[:5]  # was 3 — more detail
+
         if not top:
-            return (
-                f"The model's baseline estimate was {context.base_value:.3f}. "
-                f"The final estimate is {context.predicted_value:.3f}."
-            )
+            return "There wasn't enough information to explain this prediction in detail."
 
         sentences: list[str] = []
-        direction_word = "increased" if context.predicted_value >= context.base_value else "decreased"
-        sentences.append(
-            f"The model's baseline estimate was {context.base_value:.3f}, "
-            f"and the final estimate {direction_word} to {context.predicted_value:.3f}."
-        )
 
-        for contribution in top:
-            if contribution.shap_value > 0:
-                effect = "increasing"
-            elif contribution.shap_value < 0:
-                effect = "decreasing"
-            else:
-                effect = "having little effect on"
-
-            percentile_clause = ""
-            if contribution.percentile is not None:
-                percentile_clause = (
-                    f" (at the {contribution.percentile:.0f}th percentile "
-                    f"in the reference population)"
-                )
-
+        # Opening — plain language, no raw log-odds numbers shown to the reader
+        if risk_percentage is not None:
+            level_clause = f" This falls in the {risk_level.lower()} range." if risk_level else ""
             sentences.append(
-                f"{contribution.name} was one of the strongest factors in this "
-                f"prediction, {effect} the estimate"
-                f"{percentile_clause}."
+                f"Based on the information provided, the estimated risk is "
+                f"{risk_percentage:.1f}%.{level_clause} Here is what influenced that result the most."
+            )
+        else:
+            direction_word = "went up" if context.predicted_value >= context.base_value else "went down"
+            sentences.append(
+                f"Starting from a general baseline, this patient's estimated risk {direction_word} "
+                f"based on the factors below."
             )
 
+        # Body — one plain sentence per top factor, strongest first
+        for rank, contribution in enumerate(top, start=1):
+            if contribution.shap_value > 0:
+                effect = "raised"
+            elif contribution.shap_value < 0:
+                effect = "lowered"
+            else:
+                effect = "had little effect on"
+
+            # Skip the percentile clause at the extremes — usually a sign
+            # this is a yes/no or category feature, where "percentile"
+            # isn't a meaningful idea to explain to a patient.
+            percentile_clause = ""
+            if contribution.percentile is not None and 0 < contribution.percentile < 100:
+                percentile_clause = (
+                    f" This is higher than about {contribution.percentile:.0f} out of "
+                    f"100 women in our data."
+                )
+
+            rank_word = "The biggest factor was" if rank == 1 else "Another important factor was"
+            sentences.append(
+                f"{rank_word} {contribution.name.lower()}, which {effect} the estimated risk."
+                f"{percentile_clause}"
+            )
+
+        # Closing — plain hedge against causal misreading
         if audience == "patient":
             sentences.append(
-                "This description reflects how the model weighed factors and "
-                "does not prove cause and effect."
+                "This is only a computer estimate based on patterns in data. It does not mean "
+                "any one factor by itself causes fibroids, and it is not a diagnosis. "
+                "Please talk to a doctor about what these results mean for you."
             )
         else:
             sentences.append(
-                "These attributions describe model behavior and should not be "
-                "interpreted as causal evidence."
+                "These are statistical associations from the model, not proven causes. "
+                "They should be interpreted alongside clinical judgment, not in place of it."
             )
 
         return " ".join(sentences)
