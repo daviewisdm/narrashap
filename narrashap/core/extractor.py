@@ -157,7 +157,16 @@ def extract(
     for name, feat_value, shap_val in zip(names, instance_values, values):
         percentile: Optional[float] = None
         if name in training_data.columns:
-            percentile = percentile_rank(float(feat_value), training_data[name])
+            column = training_data[name]
+            # Percentile rank only makes sense for continuous/ordinal
+            # features. Binary and categorical columns (e.g. yes/no
+            # clinical factors, one-hot race/ethnicity columns) have too
+            # few distinct values for "higher than X% of women" to be a
+            # meaningful statement, so we skip percentile computation for
+            # them and leave it None. The narrator already knows to omit
+            # the percentile clause when it's None.
+            if column.nunique(dropna=True) > 2:
+                percentile = percentile_rank(float(feat_value), column)
 
         contributions.append(
             FeatureContribution(
