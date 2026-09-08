@@ -15,6 +15,22 @@ from narrashap.templates.causal_language import (
     check_narrative,
 )
 
+# Jargon that technically satisfies the causal-language rules but still
+# reads as a statistics report, not a plain-language explanation. Kept
+# separate from BANNED_PHRASES since it's about tone/accessibility, not
+# causal-claim safety.
+JARGON_TERMS = [
+    "SHAP",
+    "attribution weight",
+    "attribution",
+    "log-odds",
+    "baseline prediction",
+    "positive attribution",
+    "negative attribution",
+    "risk attributions",
+    "feature",
+]
+
 
 @dataclass
 class Narrative:
@@ -51,13 +67,26 @@ class BaseNarrator:
         domain_hedges = self.causal_language_policy.get("required_hedges", [])
         return list(REQUIRED_HEDGE_EXAMPLES) + list(domain_hedges)
 
-    def build_prompt(self, context: ExplanationContext) -> str:
+    def build_prompt(
+        self,
+        context: ExplanationContext,
+        risk_percentage: Optional[float] = None,
+        risk_level: Optional[str] = None,
+    ) -> str:
         """Construct an LLM prompt from *context* and narrator configuration.
 
         Parameters
         ----------
         context:
             Structured SHAP explanation for a single instance.
+        risk_percentage:
+            Optional real-world risk percentage (e.g. 65.6, meaning 65.6%).
+            When provided, this is shown to the LLM instead of the raw
+            base_value/predicted_value, which are in log-odds space and
+            not meaningful to a non-technical reader — and tend to get
+            echoed back verbatim if given directly.
+        risk_level:
+            Optional label like "MODERATE RISK" to include for context.
 
         Returns
         -------
@@ -78,19 +107,15 @@ class BaseNarrator:
         target_grade = AUDIENCE_PROFILES[self.audience]
         top_contributions = context.contributions[:5]
 
+        # Deliberately omit raw SHAP magnitudes and percentiles from what
+        # the LLM sees — only direction and relative rank. This keeps the
+        # model from repeating numbers back as jargon (e.g. "attribution
+        # weight of +1.58"). The real numbers are still used separately
+        # by the fidelity scorer against the actual context, not the prompt.
         contribution_lines: list[str] = []
-        for contrib in top_contributions:
-            direction = "positive" if contrib.shap_value >= 0 else "negative"
-            percentile_str = (
-                f", percentile={contrib.percentile:.1f}"
-                if contrib.percentile is not None
-                else ""
-            )
-            contribution_lines.append(
-                f"- {contrib.name}: value={contrib.value}, "
-                f"shap={contrib.shap_value:+.4f}, direction={direction}"
-                f"{percentile_str}"
-            )
+        for rank, contrib in enumerate(top_contributions, start=1):
+            direction = "increases the risk" if contrib.shap_value >= 0 else "decreases the risk"
+            contribution_lines.append(f"- Rank {rank}: {contrib.name} — {direction}")
 
         terminology_lines = [
             f"  '{generic}' -> '{domain}'"
@@ -100,22 +125,33 @@ class BaseNarrator:
         banned = self._all_banned_phrases()
         hedges = self._all_hedge_examples()
 
+        if risk_percentage is not None:
+            level_clause = f" ({risk_level})" if risk_level else ""
+            risk_line = f"Estimated risk for this patient: {risk_percentage:.1f}%{level_clause}"
+        else:
+            risk_line = (
+                f"Baseline prediction: {context.base_value:.4f}, "
+                f"final prediction: {context.predicted_value:.4f}"
+            )
+
         prompt_parts = [
-            "You are generating a faithful narrative explanation of a machine "
-            "learning model prediction based on SHAP feature attributions.",
+            "You are writing a plain-language explanation of a health risk "
+            "prediction for someone with no statistics or machine learning "
+            "background. Write like a caring nurse explaining results in "
+            "conversation, not like a technical report.",
             "",
             f"Tone profile: {self.tone_profile}",
             f"Target audience: {self.audience}",
-            f"Target reading level: Flesch-Kincaid grade {target_grade}",
+            f"Target reading level: Flesch-Kincaid grade {target_grade} — "
+            "keep sentences short and use everyday words.",
             "",
             "Use the following terminology substitutions where generic ML "
             "concepts appear:",
             *terminology_lines,
             "",
-            f"Baseline prediction (base_value): {context.base_value:.4f}",
-            f"Final predicted value: {context.predicted_value:.4f}",
+            risk_line,
             "",
-            "Top feature contributions (by absolute SHAP value):",
+            "Top contributing factors, strongest first:",
             *contribution_lines,
             "",
             "IMPORTANT — causal language restrictions:",
@@ -125,19 +161,39 @@ class BaseNarrator:
             "Instead, use hedging language such as:",
             ", ".join(f'"{h}"' for h in hedges),
             "",
-            "Write 2-4 sentences explaining how the model reached this "
-            "prediction. Attribute changes to features using association "
-            "language only — never imply causation.",
+            "IMPORTANT — avoid technical/statistical jargon entirely. Do NOT "
+            "use any of these words or similar: " + ", ".join(f'"{j}"' for j in JARGON_TERMS) + ". "
+            "Do not mention any raw numbers, scores, weights, or percentiles "
+            "for individual factors — describe direction and importance in "
+            "plain words only (e.g. 'the biggest factor was...', "
+            "'this also played a role...').",
+            "",
+            "Write 6-10 short, warm, plain-English sentences covering all of "
+            "the listed factors, explaining what most likely influenced this "
+            "result and what that means for the patient in everyday terms. "
+            "End with a brief, gentle note that this is a computer estimate, "
+            "not a diagnosis, and does not prove any single factor causes "
+            "the condition.",
         ]
         return "\n".join(prompt_parts)
 
-    def explain(self, context: ExplanationContext) -> Narrative:
+    def explain(
+        self,
+        context: ExplanationContext,
+        risk_percentage: Optional[float] = None,
+        risk_level: Optional[str] = None,
+    ) -> Narrative:
         """Generate a narrative for *context* via the configured LLM client.
 
         Parameters
         ----------
         context:
             Structured SHAP explanation for a single instance.
+        risk_percentage:
+            Optional real-world risk percentage to show instead of raw
+            log-odds values. See :meth:`build_prompt`.
+        risk_level:
+            Optional risk level label (e.g. "MODERATE RISK").
 
         Returns
         -------
@@ -157,7 +213,7 @@ class BaseNarrator:
                 "constructor (e.g. AnthropicClient or a mock for testing)."
             )
 
-        prompt = self.build_prompt(context)
+        prompt = self.build_prompt(context, risk_percentage=risk_percentage, risk_level=risk_level)
         text = self.llm_client.generate(prompt)
 
         banned_found = check_narrative(text)
