@@ -1,173 +1,173 @@
-# Narrashap
+# narrashap
 
-> Transform machine learning explanations into clear, trustworthy, human-readable reports.
+**Turn SHAP explanations into clear, audience-appropriate, fidelity-checked narratives.**
 
-Narrashap is an open-source Python library that converts raw Explainable AI (XAI) outputs into detailed narratives for researchers, engineers, clinicians, business users, and decision-makers.
+SHAP tells you *what* moved a model's prediction. `narrashap` explains *why it matters*, in plain language, for the person who actually has to read it — a patient, a clinician, an underwriter, or an executive — without overstating what the numbers actually say.
 
-Rather than displaying only SHAP values and feature contribution plots, ExplainKit explains **how** a model reached its prediction in natural language while remaining faithful to the underlying explanation algorithm.
-
----
-
-## Motivation
-
-Current XAI libraries excel at generating feature attribution scores but often leave interpretation to the user.
-
-For example, SHAP might output:
-
-| Feature | SHAP Value |
-|----------|-----------:|
-| Age | +0.27 |
-| Smoking | +0.18 |
-| BMI | +0.11 |
-| Exercise | -0.08 |
-
-ExplainKit turns this into:
-
-> The model's baseline prediction was **18.4%**.
->
-> After evaluating the patient's characteristics, the predicted risk increased to **61.2%**.
->
-> Smoking history was the strongest contributor to the prediction, followed by age and BMI. Regular exercise reduced the predicted risk, partially offsetting these factors.
->
-> These explanations describe how the model reached its prediction and should not be interpreted as evidence of causal relationships.
+> ⚠️ **Project status:** v1 core implemented and working end-to-end against a real model (see [DadaCare integration](#proof-of-concept-dadacare)). API is stabilizing but may still change.
 
 ---
 
-## Features
+## Why this exists
 
-- Natural language explanations
-- Baseline prediction interpretation
-- Feature contribution summaries
-- Positive and negative driver ranking
-- AI-assisted explanation generation
-- Audience-aware reports
-- Interactive HTML reports
-- Markdown and PDF export
-- Jupyter Notebook support
-- Streamlit integration
-- Explanation validation
-- Counterfactual-ready architecture
-- Fairness and sensitive-feature alerts *(planned)*
+SHAP values are precise but illegible to most of the people who need to act on them. Existing narration approaches either stop at raw feature-contribution numbers or hand everything to an LLM with no guardrails — which risks turning a statistical attribution ("this feature pushed the prediction up") into a causal claim the model never made ("this feature caused the outcome"). That distinction matters everywhere, but especially in healthcare, credit, and fraud contexts where an overconfident sentence has real consequences.
+
+`narrashap` is built around three ideas:
+
+1. **Narratives are generated from structured SHAP output, not vibes** — base value, contribution, feature value, and where that value sits in the training distribution all feed the prompt.
+2. **Causal language is opt-out, not opt-in** — every narrator hedges by default ("was associated with," "one of the strongest factors") unless deliberately configured otherwise, and generated text is checked against a banned-phrase list before it's returned.
+3. **A narrative can be scored, not just generated** — did it mention the top contributors, did it get the direction right, did it invent anything not in the data.
 
 ---
 
-## Example
+## Installation
+
+```bash
+git clone git@github.com:daviewisdm/narrashap.git
+cd narrashap
+pip install -e .
+```
+
+For LLM-backed narration, install the client you need:
+
+```bash
+pip install anthropic   # for AnthropicClient
+pip install groq        # for GroqClient
+```
+
+Neither is a hard dependency — both are imported lazily, so `TemplateOnlyClient` (see below) works with zero extra installs and no API key.
+
+---
+
+## Quickstart
 
 ```python
 import shap
-from explainkit import Explainer
+import pandas as pd
 
-explainer = Explainer(model, X_train)
+from narrashap.core.extractor import extract
+from narrashap.core.llm_client import TemplateOnlyClient
+from narrashap.domains.healthcare import HealthcareNarrator
 
-report = explainer.explain(
-    observation=X_test.iloc[0]
+# 1. Compute SHAP values as usual
+explainer = shap.Explainer(model, X_train)
+shap_values = explainer(X_instance)[0]
+
+# 2. Extract into narrashap's structured context
+context = extract(
+    shap_values=shap_values,
+    instance=X_instance.iloc[0],
+    training_data=X_train,
 )
 
-print(report.summary())
+# 3. Generate a narrative — no API key needed
+text = TemplateOnlyClient().generate_from_context(
+    context,
+    audience="patient",
+    risk_percentage=65.6,   # optional: shows a real-world number instead of raw log-odds
+    risk_level="MODERATE RISK",
+)
+print(text)
 ```
 
-Output
+**With an LLM for richer prose** (optional, requires an API key):
 
-```
-Prediction: 0.74
+```python
+from narrashap.core.llm_client import GroqClient
 
-Baseline prediction:
-0.21
+narrator = HealthcareNarrator(audience="patient", llm_client=GroqClient())
+narrative = narrator.explain(context, risk_percentage=65.6, risk_level="MODERATE RISK")
 
-Main contributors:
-
-↑ Smoking (+0.18)
-↑ BMI (+0.12)
-↑ Age (+0.09)
-
-Risk-reducing factors:
-
-↓ Exercise (-0.05)
-
-Summary:
-
-The model predicts a higher-than-average risk for this patient. Smoking history was the strongest contributor, followed by BMI and age. Regular exercise partially reduced the prediction. These explanations reflect the model's reasoning and should not be interpreted as causal evidence.
+print(narrative.text)
+print(narrative.fidelity_score)
 ```
 
 ---
 
-## Vision
+## Architecture
 
-Narrashap aims to bridge the gap between machine learning models and the people who rely on them.
+```
+narrashap/
+├── core/
+│   ├── extractor.py    # SHAP → structured ExplanationContext, with percentile context
+│   ├── llm_client.py    # LLMClient protocol + AnthropicClient, GroqClient, TemplateOnlyClient
+│   ├── narrator.py      # BaseNarrator: prompt building, generation, hedging enforcement
+│   └── scorer.py        # Narrative fidelity scoring against the real SHAP values
+├── domains/
+│   ├── healthcare.py    # HealthcareNarrator — clinical terminology + hedging
+│   └── fraud.py         # FraudNarrator — investigative tone + hedging
+├── templates/
+│   ├── audience.py       # Reading-level targets per audience (patient/clinician/executive)
+│   └── causal_language.py # Shared banned-phrase list + negation-aware checker
+└── tests/
+```
 
-We believe explanations should be:
+### `core/extractor.py`
 
-- Accurate
-- Faithful
-- Understandable
-- Transparent
-- Actionable
-- Responsible
+Converts raw SHAP output (either a `shap.Explanation` object or plain arrays) into a `ExplanationContext`: a sorted list of `FeatureContribution`s (name, value, SHAP value, percentile), plus base and predicted values.
+
+**Percentile context is skipped for binary/categorical features.** A yes/no clinical factor or a one-hot column doesn't have a meaningful "higher than X% of patients" reading — `extract()` checks `training_data[column].nunique() > 2` before computing a percentile, leaving it `None` otherwise. Narrators already handle `percentile=None` by omitting that clause.
+
+### `core/llm_client.py`
+
+Three interchangeable clients, all satisfying the same `LLMClient` protocol (`generate(prompt, max_tokens) -> str`):
+
+- **`AnthropicClient`** — Anthropic API.
+- **`GroqClient`** — Groq API (OpenAI-compatible, generous free tier). Defaults to `openai/gpt-oss-120b`; if you hit a `model_not_found` error, Groq's available models change over time — check their current model list.
+- **`TemplateOnlyClient`** — no LLM call at all, builds a narrative from string templates via `generate_from_context(context, audience, risk_percentage=None, risk_level=None)`. Always available, zero cost, zero network calls. Good default for anything that can't send data to an external API.
+
+**Reasoning-model note:** if you're using a Groq (or similar) reasoning model, set `max_tokens` generously (800+) and consider `reasoning_effort="low"` — reasoning models spend part of the token budget on internal chain-of-thought before the actual answer, and a low `max_tokens` can leave nothing for the visible narrative.
+
+### `core/narrator.py`
+
+`BaseNarrator.build_prompt()` assembles the LLM prompt: top contributions (direction and rank only — raw SHAP magnitudes are deliberately withheld from the prompt so the model doesn't echo them back as jargon), domain terminology substitutions, the audience's target reading level, and explicit instructions to avoid both causal language and technical jargon.
+
+`BaseNarrator.explain()` generates, checks the output against the banned-phrase list, retries once with a corrective instruction if violations are found, and raises `RuntimeError` if it's still non-compliant after the retry — it will not silently return non-compliant text.
+
+Pass `risk_percentage`/`risk_level` through to both `build_prompt` and `explain` when you have a real-world display value (e.g. "65.6%, MODERATE RISK") — otherwise the prompt falls back to raw log-odds base/predicted values, which read as confusing jargon to a non-technical audience.
+
+### `core/scorer.py`
+
+Scores generated narrative text against the actual `ExplanationContext` it was generated from — completeness (were the top contributors mentioned), direction accuracy (did it get increase/decrease right), hallucination penalty (did it mention something not in the data), and a readability estimate. This is the project's main differentiator: most SHAP tooling scores the *attribution*, not whether the *narrative text* faithfully represents it.
+
+### `templates/causal_language.py`
+
+`check_narrative(text)` scans for banned causal phrases (`"causes"`, `"proven"`, `"guaranteed"`, etc.) but is **negation-aware at the sentence level** — "this is not proven to cause X" or "this does not mean smoking causes X" are correctly recognized as safe hedges, not violations, because a negation word appears earlier in the same sentence. A fixed word-count lookback was tried first and produced false positives on exactly this kind of disclaimer language; sentence-scoping fixed it.
+
+Known tradeoff: a compound sentence with an unrelated negation earlier in the same sentence (e.g. "It does not lower X; however, it causes Y.") could be incorrectly cleared. Accepted as a rare edge case for now.
+
+---
+
+## Proof of concept: DadaCare
+
+This library is being developed alongside DadaCare (a uterine fibroid risk prediction Streamlit app) as a real integration test, not just synthetic examples. Lessons from that integration, in case you hit the same issues:
+
+- **Pass real-world risk values, not raw model output.** SHAP base/predicted values are in log-odds space for a logistic regression model; showing them directly to an LLM in the prompt causes it to echo them back as confusing jargon ("attribution weight of +1.58"). Compute your real display value (e.g. a probability percentage) separately and pass it via `risk_percentage`/`risk_level`.
+- **`st.secrets` in Streamlit raises, it doesn't return `None`,** when no `secrets.toml` exists at all. If you're checking for an optional API key with a Streamlit-style fallback, wrap the `st.secrets.get(...)` call in a `try/except`, don't rely on its default value alone.
+- **Environment variables don't persist across terminal sessions** unless set with something like `setx` (Windows) — a common source of "it worked yesterday" confusion during local development.
 
 ---
 
-## Planned Roadmap
+## Design principles
 
-### Version 0.1
-- SHAP integration
-- Narrative explanations
-- Feature ranking
-- Markdown reports
-
-### Version 0.2
-- HTML report generation
-- Streamlit component
-- PDF export
-- Explanation templates
-
-### Version 0.3
-- Support for LIME
-- Counterfactual explanations
-- Explanation quality metrics
-- Confidence summaries
-
-### Version 0.4
-- Domain-specific explainers
-    - Healthcare
-    - Finance
-    - Insurance
-    - Manufacturing
-
-### Version 1.0
-- Multi-framework support
-- LLM-assisted explanations
-- Interactive dashboards
-- Production-ready API
+- **Attribution, not causation.** SHAP explains model behavior relative to a baseline; it does not establish that a feature causes an outcome. Narratives reflect that distinction by default, and generated text is checked, not just prompted, for this.
+- **Domain packs are config, not forks.** Adding a new domain narrator means supplying a terminology map and causal-language policy, not rewriting the pipeline.
+- **A narrative is only as good as its fidelity to the numbers.** Generating fluent text is easy; generating text that's verifiably accurate to the SHAP output is the actual problem this project solves.
 
 ---
 
-## Design Principles
+## Known issues / roadmap
 
-Narrashap follows four core principles:
-
-1. **Faithfulness** — Every explanation must accurately reflect the model's behavior.
-2. **Transparency** — Users should understand how predictions are formed.
-3. **Accessibility** — Explanations should be understandable by non-technical audiences.
-4. **Extensibility** — Support multiple XAI frameworks through a consistent interface.
-
----
+- `FraudNarrator` exists with terminology/hedging configured but hasn't been integration-tested against a real fraud model yet (only DadaCare/healthcare has been).
+- `FinanceNarrator`, `InsuranceNarrator`, `ManufacturingNarrator` are planned, not yet started.
+- Cross-retrain consistency checking (warn when explanations drift across model versions) is designed but not implemented.
+- Fairness flag surfacing (highlighting when sensitive/proxy features are top contributors) is designed but not implemented.
+- `scorer.extract_claims()` uses simple keyword matching, not a second LLM call — works but is not robust to heavy paraphrasing.
 
 ## Contributing
 
-Contributions are welcome!
-
-Whether you're improving documentation, fixing bugs, designing visualizations, or implementing new explanation strategies, we'd love your help.
-
----
-
-## Disclaimer
-
-Narrashap explains **how a machine learning model arrived at its prediction**.
-
-It does **not** establish causal relationships or provide medical, legal, or financial advice. Users remain responsible for interpreting model outputs within the appropriate domain context.
-
----
+Run tests with `python -m pytest -q` before submitting anything. If you're touching `causal_language.py`, add a test case to the negation-handling tests — false positives there directly break real usage (see the DadaCare notes above for two real examples that were caught and fixed this way).
 
 ## License
 
-MIT License
+TBD.
