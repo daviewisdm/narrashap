@@ -1,6 +1,7 @@
 README.md
 pyproject.toml
 narrashap/__init__.py
+narrashap/convenience.py
 narrashap.egg-info/PKG-INFO
 narrashap.egg-info/SOURCES.txt
 narrashap.egg-info/dependency_links.txt
