@@ -251,6 +251,82 @@ print(result)
 
 ---
 
+## Using this in a Jupyter Notebook (ready-to-paste cell)
+
+If you're working in a notebook rather than a script, here's a self-contained cell you can paste in and adapt. It assumes you already have, from earlier cells in your notebook: a fitted `model` (a scikit-learn `Pipeline` with a `preprocessor` step and a `classifier` step), and `X_train` (the DataFrame the model was trained on). **It does not train or fit anything new** — it only reads from what your notebook has already built.
+
+```python
+# --- narrashap: explain one prediction, right here in the notebook ---
+from narrashap import narrate
+
+# Pick which row to explain — change this to any row in your data
+patient_idx = 0
+X_instance = X_train.iloc[[patient_idx]]
+
+# Reuse your notebook's already-fitted preprocessor and model
+preprocessor = model.named_steps['preprocessor']
+classifier = model.named_steps['classifier']
+
+X_trans = preprocessor.transform(X_instance)
+feature_names = list(preprocessor.get_feature_names_out())
+
+# Clean up names like "num__Age" -> "Age" so the narrative reads naturally
+def clean_name(name):
+    return name.replace("num__", "").replace("cat__", "").replace("_", " ").title()
+
+clean_feature_names = [clean_name(fn) for fn in feature_names]
+
+# SHAP values for a logistic regression: coefficient * feature value
+# (swap this line out if your model isn't logistic regression)
+shap_vals = classifier.coef_[0] * X_trans[0]
+
+# Training data, transformed the same way, so narrate() can compute
+# percentile context ("higher than X out of 100 in the data")
+X_train_trans = preprocessor.transform(X_train)
+training_df = pd.DataFrame(X_train_trans, columns=clean_feature_names)
+
+# The model's real predicted probability, as a percentage
+proba = classifier.predict_proba(X_trans)[0][1]
+risk_pct = round(proba * 100, 1)
+risk_level = "HIGH RISK" if risk_pct >= 70 else "MODERATE RISK" if risk_pct >= 40 else "LOW RISK"
+
+# The one-liner that ties it all together
+narrated_shap = narrate(
+    shap_values=shap_vals,
+    instance=pd.Series(X_trans[0], index=clean_feature_names),
+    training_data=training_df,
+    feature_names=clean_feature_names,
+    base_value=classifier.intercept_[0],
+    risk_percentage=risk_pct,
+    risk_level=risk_level,
+)
+
+print(narrated_shap)
+```
+
+**Want the AI-generated version instead of the free template?** Add one line:
+
+```python
+from narrashap.core.llm_client import GroqClient
+
+narrated_shap = narrate(
+    shap_values=shap_vals,
+    instance=pd.Series(X_trans[0], index=clean_feature_names),
+    training_data=training_df,
+    feature_names=clean_feature_names,
+    base_value=classifier.intercept_[0],
+    risk_percentage=risk_pct,
+    risk_level=risk_level,
+    llm_client=GroqClient(),  # needs GROQ_API_KEY set — see Step 4 above
+)
+
+print(narrated_shap)
+```
+
+If your notebook's variable names don't match (`model`, `X_train`, or the pipeline's step names), just swap them in — everything else stays the same.
+
+---
+
 ## What you get back
 
 By default, `narrate()` gives you back a plain string — just the explanation text, ready to print or display.
