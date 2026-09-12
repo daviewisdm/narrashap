@@ -1,172 +1,350 @@
 # narrashap
 
-**Turn SHAP explanations into clear, audience-appropriate, fidelity-checked narratives.**
+**Turn confusing model predictions into plain English — in one line of code.**
 
-SHAP tells you *what* moved a model's prediction. `narrashap` explains *why it matters*, in plain language, for the person who actually has to read it — a patient, a clinician, an underwriter, or an executive — without overstating what the numbers actually say.
+If you've ever built a machine learning model and had someone ask "okay but *why* did it say that?", this library is for that moment. `narrashap` takes the technical output of a popular explainability tool called **SHAP** and turns it into a sentence a regular person can actually read — no statistics background required.
 
-> ⚠️ **Project status:** v1 core implemented and working end-to-end against a real model (see [DadaCare integration](#proof-of-concept-dadacare)). API is stabilizing but may still change.
-
----
-
-## Why this exists
-
-SHAP values are precise but illegible to most of the people who need to act on them. Existing narration approaches either stop at raw feature-contribution numbers or hand everything to an LLM with no guardrails — which risks turning a statistical attribution ("this feature pushed the prediction up") into a causal claim the model never made ("this feature caused the outcome"). That distinction matters everywhere, but especially in healthcare, credit, and fraud contexts where an overconfident sentence has real consequences.
-
-`narrashap` is built around three ideas:
-
-1. **Narratives are generated from structured SHAP output, not vibes** — base value, contribution, feature value, and where that value sits in the training distribution all feed the prompt.
-2. **Causal language is opt-out, not opt-in** — every narrator hedges by default ("was associated with," "one of the strongest factors") unless deliberately configured otherwise, and generated text is checked against a banned-phrase list before it's returned.
-3. **A narrative can be scored, not just generated** — did it mention the top contributors, did it get the direction right, did it invent anything not in the data.
+This guide assumes you're new to this. It walks through everything: getting the code, installing it, running your first example, and setting up a free AI service to make the explanations even better.
 
 ---
 
-## Installation
+## What problem does this solve?
+
+Machine learning models (like one that predicts a health risk, or flags a fraudulent transaction) don't explain themselves. A tool called **SHAP** can tell you *which* factors influenced a prediction and by how much — but its raw output looks like this:
+
+```
+Age: +0.31
+Race_Black: +1.58
+Family_History: -0.57
+```
+
+That's useful to a data scientist. It means nothing to a patient, a manager, or anyone without a machine learning background.
+
+`narrashap` turns that into something like:
+
+> "Based on the information provided, the estimated risk is 65.6%. This falls in the moderate risk range. The biggest factor was race, which raised the estimated risk. Another important factor was family history, which lowered the estimated risk. This is only a computer estimate based on patterns in data. It does not mean any one factor by itself causes the outcome, and it is not a diagnosis."
+
+That's the whole point of this project.
+
+---
+
+## Before you start: things you'll need
+
+- **Python 3.10 or newer** installed on your computer. Check with:
+  ```bash
+  python --version
+  ```
+- **Git**, to download (clone) the code. Check with:
+  ```bash
+  git --version
+  ```
+- A trained machine learning model you want to explain, along with the data it was trained on. (If you don't have one yet, this library has nothing to explain — it works *on top of* a model, it doesn't build one for you.)
+- (Optional, but recommended) A free **Groq** API key, if you want richer, more natural-sounding explanations instead of the simpler built-in template sentences. More on this below — it's free and takes two minutes.
+
+---
+
+## Step 1: Clone the repository
+
+"Cloning" just means downloading a copy of the code from GitHub onto your computer.
+
+Open a terminal (Command Prompt, PowerShell, or Terminal on Mac) and run:
 
 ```bash
 git clone git@github.com:daviewisdm/narrashap.git
-cd narrashap
-pip install -e .
 ```
 
-For LLM-backed narration, install the client you need:
+If that gives you an error about SSH keys or permissions, use this version instead (it works without any extra setup):
 
 ```bash
-pip install anthropic   # for AnthropicClient
-pip install groq        # for GroqClient
+git clone https://github.com/daviewisdm/narrashap.git
 ```
 
-Neither is a hard dependency — both are imported lazily, so `TemplateOnlyClient` (see below) works with zero extra installs and no API key.
+Then move into the folder it just created:
+
+```bash
+cd narrashap
+```
 
 ---
 
-## Quickstart
+## Step 2: Install it
 
-```python
-import shap
-import pandas as pd
+From inside that `narrashap` folder, run:
 
-from narrashap.core.extractor import extract
-from narrashap.core.llm_client import TemplateOnlyClient
-from narrashap.domains.healthcare import HealthcareNarrator
-
-# 1. Compute SHAP values as usual
-explainer = shap.Explainer(model, X_train)
-shap_values = explainer(X_instance)[0]
-
-# 2. Extract into narrashap's structured context
-context = extract(
-    shap_values=shap_values,
-    instance=X_instance.iloc[0],
-    training_data=X_train,
-)
-
-# 3. Generate a narrative — no API key needed
-text = TemplateOnlyClient().generate_from_context(
-    context,
-    audience="patient",
-    risk_percentage=65.6,   # optional: shows a real-world number instead of raw log-odds
-    risk_level="MODERATE RISK",
-)
-print(text)
+```bash
+pip install -e .
 ```
 
-**With an LLM for richer prose** (optional, requires an API key):
+**What this does:** it installs `narrashap` so Python can find it, in "editable" mode — meaning if you (or someone else) later change the code, you don't have to reinstall it every time.
+
+**If you're on Windows and see an error mentioning "externally managed environment":** add this flag instead:
+
+```bash
+pip install -e . --break-system-packages
+```
+
+**To check it worked**, run this:
+
+```bash
+python -c "from narrashap import narrate; print('It works!')"
+```
+
+If you see `It works!` printed, you're good to move on. If you see an error instead, check the [Troubleshooting](#troubleshooting) section near the end.
+
+---
+
+## Step 3: Try it with a tiny example (no model needed yet)
+
+Before wiring this into your real project, let's prove it works with fake data. Create a file called `quick_test.py` (or a new cell in a Jupyter notebook) and paste this in:
+
+```python
+import pandas as pd
+from narrashap import narrate
+
+# Fake "training data" — pretend this is what your model was trained on
+training_data = pd.DataFrame({
+    "Age": [25, 30, 45, 60, 35, 50],
+    "Smoker": [0, 0, 1, 1, 0, 1],
+})
+
+# Fake SHAP values for one person: Age contributed +0.4, Smoker contributed +0.9
+shap_values = [0.4, 0.9]
+
+# The actual feature values for this one person
+instance = pd.Series({"Age": 45, "Smoker": 1})
+
+result = narrate(
+    shap_values=shap_values,
+    instance=instance,
+    training_data=training_data,
+    feature_names=["Age", "Smoker"],
+    base_value=0.1,          # the model's "starting point" before considering this person
+    risk_percentage=72.0,    # optional: the real percentage you'd show a user
+    risk_level="HIGH RISK",  # optional: a label to go with it
+)
+
+print(result)
+```
+
+Run it:
+
+```bash
+python quick_test.py
+```
+
+You should see a full paragraph explaining that the estimated risk was 72%, that being a smoker was a strong factor, and so on — all without needing any AI service or API key. This is `narrashap`'s **free, offline mode** — it uses fixed sentence templates, not an AI model, so it always works with zero setup and zero cost.
+
+---
+
+## Step 4 (optional but recommended): Set up Groq for richer explanations
+
+The example above works, but the sentences follow a fairly repetitive pattern since they're built from fixed templates. If you want explanations that read more naturally — more like a person actually wrote them — you can plug in a free AI service called **Groq**.
+
+### Why Groq specifically?
+
+It's free (no credit card needed to start), fast, and gives you a generous number of free requests per day — more than enough for testing and even regular use.
+
+### 4a. Get a free Groq API key
+
+1. Go to [console.groq.com](https://console.groq.com) and sign up (free).
+2. Once logged in, find the **API Keys** section and create a new key.
+3. Copy the key — it will look something like `gsk_abc123...`. You won't be able to see it again after you close that page, so copy it somewhere safe now.
+
+### 4b. Install the Groq Python package
+
+```bash
+pip install groq
+```
+
+### 4c. Make your API key available to your code
+
+Your code needs to know your key, but you should **never** type your key directly into a file that gets shared or uploaded to GitHub — that's a real security risk. Instead, set it as an "environment variable" for your terminal session.
+
+**On Windows (PowerShell):**
+```powershell
+$env:GROQ_API_KEY = "gsk_your-actual-key-here"
+```
+
+**On Mac/Linux:**
+```bash
+export GROQ_API_KEY="gsk_your-actual-key-here"
+```
+
+⚠️ **Important:** this only lasts for your *current terminal window*. If you close the terminal and open a new one, you'll need to set it again — that's normal, not a bug. If you find that annoying, see the "make it permanent" note below.
+
+**To check it's actually set**, run:
+
+```powershell
+echo $env:GROQ_API_KEY      # Windows PowerShell
+```
+```bash
+echo $GROQ_API_KEY          # Mac/Linux
+```
+
+If that prints your key back, you're set. If it prints nothing, the step above didn't take — try it again in the exact same terminal window you'll run your code from.
+
+**Making it permanent (Windows only), so you don't have to repeat this every time:**
+```powershell
+setx GROQ_API_KEY "gsk_your-actual-key-here"
+```
+Note: after running `setx`, you must close your terminal completely and open a brand new one before it takes effect.
+
+### 4d. Use it in your code
+
+Now, instead of the free template mode, pass `llm_client=GroqClient()`:
 
 ```python
 from narrashap.core.llm_client import GroqClient
 
-narrator = HealthcareNarrator(audience="patient", llm_client=GroqClient())
-narrative = narrator.explain(context, risk_percentage=65.6, risk_level="MODERATE RISK")
+result = narrate(
+    shap_values=shap_values,
+    instance=instance,
+    training_data=training_data,
+    feature_names=["Age", "Smoker"],
+    base_value=0.1,
+    risk_percentage=72.0,
+    risk_level="HIGH RISK",
+    llm_client=GroqClient(),   # <-- this line switches on the AI-generated version
+)
 
-print(narrative.text)
-print(narrative.fidelity_score)
+print(result)
 ```
+
+Run it again — this time it'll make a real (free) call to Groq's servers and give you back a longer, more natural-sounding paragraph.
+
+**If you get an error saying a "model" doesn't exist or "model_not_found":** AI companies frequently retire old models and replace them with newer ones. Check Groq's current model list at [console.groq.com/docs/models](https://console.groq.com/docs/models) and update the model name if needed — see the [Troubleshooting](#troubleshooting) section for exactly where to change this.
 
 ---
 
-## Architecture
+## Step 5: Using it with a real model
+
+Once you have an actual trained model, here's the general shape of what you need:
+
+```python
+import shap
+import pandas as pd
+from narrashap import narrate
+
+# 1. Your already-trained model and the data it learned from
+#    (however you normally load these — pickle, joblib, etc.)
+model = ...          # your trained model
+X_train = ...         # the data you trained it on (a pandas DataFrame)
+X_instance = ...      # the ONE row/person you want to explain
+
+# 2. Compute SHAP values for that one instance
+explainer = shap.Explainer(model, X_train)
+shap_values = explainer(X_instance)[0]
+
+# 3. Get the narrative — that's it
+result = narrate(
+    shap_values=shap_values,
+    instance=X_instance.iloc[0],
+    training_data=X_train,
+    risk_percentage=65.6,     # your model's actual predicted probability, as a %
+    risk_level="MODERATE RISK",
+)
+
+print(result)
+```
+
+**A real, working example of this exact pattern** — including handling a scikit-learn `Pipeline`, a preprocessing step, and a logistic regression model specifically — lives in the [DadaCare project](#) (`uf-risk-model` repo), in `fibroids_hospital_app/app.py`. If your model setup looks similar (a `Pipeline` with a `preprocessor` step and a classifier step), that file is the best reference for exact code to copy.
+
+---
+
+## What you get back
+
+By default, `narrate()` gives you back a plain string — just the explanation text, ready to print or display.
+
+If you want more detail — like a "how confident is this explanation" score — add `return_details=True`:
+
+```python
+result = narrate(
+    shap_values=shap_values,
+    instance=X_instance.iloc[0],
+    training_data=X_train,
+    return_details=True,
+)
+
+print(result.text)              # the explanation, same as before
+print(result.fidelity_score)    # a 0-1 score of how well the text matches the real numbers
+```
+
+Note: `fidelity_score` is only calculated when you're using Groq (or another AI backend) — it doesn't apply to the free template mode, so it'll show up as `None` there.
+
+---
+
+## Understanding the safety guardrails (why this matters)
+
+This library is deliberately careful about **not implying that a factor *causes* an outcome** — it only ever says a factor is "associated with" or "one of the strongest factors in" a prediction. This distinction matters a lot in fields like healthcare: SHAP can tell you a factor influenced a model's prediction, but it can never prove that factor *causes* anything in real life.
+
+Because of this, every generated explanation is automatically checked for risky phrasing (words like "causes," "proven," "guaranteed") before it's shown to you. If the AI-generated version accidentally uses one of these words, the library automatically asks it to rewrite the sentence — and if it still can't produce a safe version after one retry, it will raise an error rather than quietly showing you something misleading. This is intentional — treat that error as the system doing its job, not a bug to route around.
+
+---
+
+## Troubleshooting
+
+**"ModuleNotFoundError: No module named 'narrashap'"**
+You probably installed it in a different Python environment than the one you're running your code in. If you're using a virtual environment or conda environment, make sure it's activated *before* you run `pip install -e .`, and activated again every time you come back to work on this.
+
+**"narrashap is not installed in this environment" (inside a Jupyter notebook)**
+Notebooks sometimes use a different Python environment than your terminal. Run this in a notebook cell to check:
+```python
+import sys
+print(sys.executable)
+```
+Then run `pip install -e /path/to/narrashap` using that *exact* Python (you may need to run it as a notebook cell with `!` in front: `!pip install -e /path/to/narrashap`).
+
+**"Groq API key required" even though I set it**
+Environment variables reset every time you open a new terminal window (unless you used `setx` on Windows and reopened the terminal afterward). Set it again in the terminal window you're actually running your code from.
+
+**"The model `...` does not exist or you do not have access to it" (from Groq)**
+The specific AI model name is outdated. Open `narrashap/core/llm_client.py`, find the `GroqClient` class, and update the default `model=` value to a current model name from [console.groq.com/docs/models](https://console.groq.com/docs/models).
+
+**The AI-generated explanation sounds too technical / mentions raw numbers**
+Make sure you're passing `risk_percentage` and `risk_level` into `narrate()`. Without them, the explanation falls back to showing the model's raw internal numbers, which aren't meant for a general audience.
+
+**Everything crashes with a "Generated narrative still contains banned phrases after retry" error**
+This means the AI-generated text used risky causal language twice in a row and the safety check correctly blocked it. This is rare, and usually resolves itself if you just try again (AI responses vary each time). If it happens constantly, this is worth reporting as an issue.
+
+---
+
+## Running the tests
+
+If you want to confirm everything on your machine is working correctly:
+
+```bash
+python -m pytest -q
+```
+
+You should see all tests pass. If any fail, don't ignore it — that usually means something in your local setup differs from what's expected (wrong Python version, missing dependency, etc.).
+
+---
+
+## Project structure, for anyone curious
 
 ```
 narrashap/
-├── core/
-│   ├── extractor.py    # SHAP → structured ExplanationContext, with percentile context
-│   ├── llm_client.py    # LLMClient protocol + AnthropicClient, GroqClient, TemplateOnlyClient
-│   ├── narrator.py      # BaseNarrator: prompt building, generation, hedging enforcement
-│   └── scorer.py        # Narrative fidelity scoring against the real SHAP values
-├── domains/
-│   ├── healthcare.py    # HealthcareNarrator — clinical terminology + hedging
-│   └── fraud.py         # FraudNarrator — investigative tone + hedging
-├── templates/
-│   ├── audience.py       # Reading-level targets per audience (patient/clinician/executive)
-│   └── causal_language.py # Shared banned-phrase list + negation-aware checker
-└── tests/
+├── narrashap/
+│   ├── convenience.py   # the narrate() one-liner — start here
+│   ├── core/
+│   │   ├── extractor.py   # turns raw SHAP output into a clean structure
+│   │   ├── llm_client.py  # the different AI backends (Groq, Anthropic, or none)
+│   │   ├── narrator.py    # builds the explanation and checks it for safety
+│   │   └── scorer.py      # scores how accurate a generated explanation is
+│   ├── domains/           # different "flavors" for different industries (healthcare, fraud, ...)
+│   └── templates/         # the free, no-AI-needed sentence templates
+└── tests/                 # automated tests confirming everything works
 ```
 
-### `core/extractor.py`
-
-Converts raw SHAP output (either a `shap.Explanation` object or plain arrays) into a `ExplanationContext`: a sorted list of `FeatureContribution`s (name, value, SHAP value, percentile), plus base and predicted values.
-
-**Percentile context is skipped for binary/categorical features.** A yes/no clinical factor or a one-hot column doesn't have a meaningful "higher than X% of patients" reading — `extract()` checks `training_data[column].nunique() > 2` before computing a percentile, leaving it `None` otherwise. Narrators already handle `percentile=None` by omitting that clause.
-
-### `core/llm_client.py`
-
-Three interchangeable clients, all satisfying the same `LLMClient` protocol (`generate(prompt, max_tokens) -> str`):
-
-- **`AnthropicClient`** — Anthropic API.
-- **`GroqClient`** — Groq API (OpenAI-compatible, generous free tier). Defaults to `openai/gpt-oss-120b`; if you hit a `model_not_found` error, Groq's available models change over time — check their current model list.
-- **`TemplateOnlyClient`** — no LLM call at all, builds a narrative from string templates via `generate_from_context(context, audience, risk_percentage=None, risk_level=None)`. Always available, zero cost, zero network calls. Good default for anything that can't send data to an external API.
-
-**Reasoning-model note:** if you're using a Groq (or similar) reasoning model, set `max_tokens` generously (800+) and consider `reasoning_effort="low"` — reasoning models spend part of the token budget on internal chain-of-thought before the actual answer, and a low `max_tokens` can leave nothing for the visible narrative.
-
-### `core/narrator.py`
-
-`BaseNarrator.build_prompt()` assembles the LLM prompt: top contributions (direction and rank only — raw SHAP magnitudes are deliberately withheld from the prompt so the model doesn't echo them back as jargon), domain terminology substitutions, the audience's target reading level, and explicit instructions to avoid both causal language and technical jargon.
-
-`BaseNarrator.explain()` generates, checks the output against the banned-phrase list, retries once with a corrective instruction if violations are found, and raises `RuntimeError` if it's still non-compliant after the retry — it will not silently return non-compliant text.
-
-Pass `risk_percentage`/`risk_level` through to both `build_prompt` and `explain` when you have a real-world display value (e.g. "65.6%, MODERATE RISK") — otherwise the prompt falls back to raw log-odds base/predicted values, which read as confusing jargon to a non-technical audience.
-
-### `core/scorer.py`
-
-Scores generated narrative text against the actual `ExplanationContext` it was generated from — completeness (were the top contributors mentioned), direction accuracy (did it get increase/decrease right), hallucination penalty (did it mention something not in the data), and a readability estimate. This is the project's main differentiator: most SHAP tooling scores the *attribution*, not whether the *narrative text* faithfully represents it.
-
-### `templates/causal_language.py`
-
-`check_narrative(text)` scans for banned causal phrases (`"causes"`, `"proven"`, `"guaranteed"`, etc.) but is **negation-aware at the sentence level** — "this is not proven to cause X" or "this does not mean smoking causes X" are correctly recognized as safe hedges, not violations, because a negation word appears earlier in the same sentence. A fixed word-count lookback was tried first and produced false positives on exactly this kind of disclaimer language; sentence-scoping fixed it.
-
-Known tradeoff: a compound sentence with an unrelated negation earlier in the same sentence (e.g. "It does not lower X; however, it causes Y.") could be incorrectly cleared. Accepted as a rare edge case for now.
-
 ---
 
-## Proof of concept: DadaCare
+## Current limitations (being upfront about what this can't do yet)
 
-This library is being developed alongside DadaCare (a uterine fibroid risk prediction Streamlit app) as a real integration test, not just synthetic examples. Lessons from that integration, in case you hit the same issues:
-
-- **Pass real-world risk values, not raw model output.** SHAP base/predicted values are in log-odds space for a logistic regression model; showing them directly to an LLM in the prompt causes it to echo them back as confusing jargon ("attribution weight of +1.58"). Compute your real display value (e.g. a probability percentage) separately and pass it via `risk_percentage`/`risk_level`.
-- **`st.secrets` in Streamlit raises, it doesn't return `None`,** when no `secrets.toml` exists at all. If you're checking for an optional API key with a Streamlit-style fallback, wrap the `st.secrets.get(...)` call in a `try/except`, don't rely on its default value alone.
-- **Environment variables don't persist across terminal sessions** unless set with something like `setx` (Windows) — a common source of "it worked yesterday" confusion during local development.
+- This has been thoroughly tested against a **logistic regression** healthcare model. Other model types (tree-based models, neural networks) should work in principle but haven't been confirmed.
+- Only "healthcare" and "fraud" have real terminology and tone configured so far — other industries (finance, insurance) are planned but not built yet.
+- It currently handles one prediction at a time, not a whole batch of predictions at once.
 
 ---
-
-## Design principles
-
-- **Attribution, not causation.** SHAP explains model behavior relative to a baseline; it does not establish that a feature causes an outcome. Narratives reflect that distinction by default, and generated text is checked, not just prompted, for this.
-- **Domain packs are config, not forks.** Adding a new domain narrator means supplying a terminology map and causal-language policy, not rewriting the pipeline.
-- **A narrative is only as good as its fidelity to the numbers.** Generating fluent text is easy; generating text that's verifiably accurate to the SHAP output is the actual problem this project solves.
-
----
-
-## Known issues / roadmap
-
-- `FraudNarrator` exists with terminology/hedging configured but hasn't been integration-tested against a real fraud model yet (only DadaCare/healthcare has been).
-- `FinanceNarrator`, `InsuranceNarrator`, `ManufacturingNarrator` are planned, not yet started.
-- Cross-retrain consistency checking (warn when explanations drift across model versions) is designed but not implemented.
-- Fairness flag surfacing (highlighting when sensitive/proxy features are top contributors) is designed but not implemented.
-- `scorer.extract_claims()` uses simple keyword matching, not a second LLM call — works but is not robust to heavy paraphrasing.
-
-## Contributing
-
-Run tests with `python -m pytest -q` before submitting anything. If you're touching `causal_language.py`, add a test case to the negation-handling tests — false positives there directly break real usage (see the DadaCare notes above for two real examples that were caught and fixed this way).
 
 ## License
 
